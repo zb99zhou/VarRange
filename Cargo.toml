@@ -1,0 +1,23 @@
+[package]
+name = "VarRange"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "VarRange"
+crate-type = ["lib"]
+
+[dependencies]
+itertools = "0.7.8"
+serde = "1.0"
+serde_derive = "1.0"
+curv-kzen = { version = "0.10", default-features = false }
+sha2 = "0.9"
+generic-array = "0.14"
+
+[dev-dependencies]
+criterion = "0.2"
+
+[features]
+default = ["curv-kzen/rust-gmp-kzen"]
+
