@@ -45,18 +45,11 @@ impl Add for VecPoly {
     type Output = VecPoly;
 
     fn add(self, other: VecPoly) -> VecPoly {
-        if self.modulus != other.modulus {
-            panic!("Moduli must be the same for addition");
-        }
-        if self.coeffs.len() != other.coeffs.len() {
-            panic!("Polynomials must have the same degree for addition");
-        }
-        if self.coeffs[0].len() != other.coeffs.len() {
-            panic!("Vectors must have the same dim for addition");
-        }
-        if self.offset != self.offset {
-            panic!("Polynomials must have the same offset");
-        }
+        assert_eq!(self.modulus, other.modulus);
+        assert_eq!(self.coeffs.len(), other.coeffs.len());
+        assert_eq!(self.coeffs[0].len(), other.coeffs[0].len());
+        assert_eq!(self.offset, other.offset);
+        
         let mut new_coeffs = Vec::with_capacity(self.coeffs.len());
         for (coeff_vec1, coeff_vec2) in self.coeffs.into_iter().zip(other.coeffs) {
             let mut new_coeff_vec = Vec::with_capacity(coeff_vec1.len());
@@ -74,15 +67,10 @@ impl Mul for VecPoly {
     type Output = Vec<BigInt>;
 
     fn mul(self, other: VecPoly) -> Vec<BigInt> {
-        if self.modulus != other.modulus {
-            panic!("Moduli must be the same for multiplication");
-        }
-        if self.coeffs[0].len() != other.coeffs[0].len() {
-            panic!("Vectors must have the same dim");
-        }
-        if self.offset != self.offset {
-            panic!("Polynomials must have the same offset");
-        }
+        assert_eq!(self.modulus, other.modulus);
+        assert_eq!(self.coeffs[0].len(), other.coeffs[0].len());
+        assert_eq!(self.offset, other.offset);
+
         let mut result_coeffs = vec![BigInt::zero(); self.coeffs.len() + other.coeffs.len() - 1];
         for (i, coeff_vec1) in self.coeffs.iter().enumerate() {
             for (j, coeff_vec2) in other.coeffs.iter().enumerate() {

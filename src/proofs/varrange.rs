@@ -11,25 +11,30 @@ use itertools::iterate;
 use crate::Errors::RangeProofError;
 use crate::Errors;
 
-use super::{ipa::OpInnerProductArg, vecpoly::{inner_product, VecPoly}};
+use super::{ipa::InnerProductArg, vecpoly::{inner_product, VecPoly}};
 
-enum VecKnowledgeAg {
+// an argument of knowledge of the vector "L"
+// when n*b+b_bar <= 21, this enumeration type is the vector "L" itself
+// otherwise it consists of t_hat and an inner product argument(IPA)
+enum AgKnowledgeVec {
     LVec(Vec<Scalar<Secp256k1>>),
-    IPA{ t_hat: BigInt, ip: OpInnerProductArg}
+    IPA{ t_hat: BigInt, ip: InnerProductArg}
 }
 
 pub struct VarRange {
-    A: Point<Secp256k1>, // Vector commitment to a
-    A_hat: Point<Secp256k1>, // Vector commitment to a_hat
-    B: Point<Secp256k1>, // Vector commitment to b
-    B_hat: Point<Secp256k1>, // Vector commitment to b_hat
-    D: Point<Secp256k1>, // Vector commitment to d
-    T_vec: Vec<Point<Secp256k1>>, // Commitment to the coeffs of M(X)
-    VKA: VecKnowledgeAg,
-    tau: Scalar<Secp256k1>, // Evaluation of poly M(x)
-    rho: Scalar<Secp256k1> // Used to balance random numbers 
+    A: Point<Secp256k1>, // vector commitment to a
+    A_hat: Point<Secp256k1>, // vector commitment to a_hat
+    B: Point<Secp256k1>, // vector commitment to b
+    B_hat: Point<Secp256k1>, // vector commitment to b_hat
+    D: Point<Secp256k1>, // vector commitment to d
+    T_vec: Vec<Point<Secp256k1>>, // commitment to the 16 non-zero coeffs of M(X)
+    AKV: AgKnowledgeVec, // an argument of L, which is the evaluation of poly L(x)
+    tau: Scalar<Secp256k1>, // evaluation of poly M(x)
+    rho: Scalar<Secp256k1> // used to balance random numbers
 }
 
+// before invoking IPA, we should pad the length of vector to power of 2
+// pad vectors over the field with 0
 fn pad_bn_to_power_of_two(bn_vec: &mut Vec<BigInt>) {
     let current_len = bn_vec.len();
     let target_len = current_len.next_power_of_two();
@@ -38,6 +43,7 @@ fn pad_bn_to_power_of_two(bn_vec: &mut Vec<BigInt>) {
     }
 }
 
+// pad vectors over the group with random point
 fn pad_point_to_power_of_two(P_vec: &mut Vec<Point<Secp256k1>>, seed: &BigInt) {
     let current_len = P_vec.len();
     let target_len = current_len.next_power_of_two();
@@ -87,7 +93,6 @@ pub fn print_bool_vec(b_vec: Vec<bool>) {
     for j in 0..b_vec.len() {
         println!("b_vec[{}] is {}", j, b_vec[j]);
     }
-    // println!();
 }
 
 pub fn print_bn_vec(bn_vec: Vec<BigInt>) {
@@ -106,7 +111,6 @@ pub fn print_vec_poly(bn_vec: Vec<Vec<BigInt>>, modulus: BigInt) {
                 print!("{} ", bn_vec[j][i].clone() - modulus.clone());
             }
         }
-        println!(">>>");
     }
 }
 
@@ -122,6 +126,16 @@ impl VarRange {
         _C_vec: &[Point<Secp256k1>],
         seed: &BigInt
     ) -> VarRange {
+        let gi = gi.to_vec();
+        let hi = hi.to_vec();
+        
+        assert_eq!(gi.len(), n + 1);
+        assert_eq!(hi.len(), n + 1);
+        assert_eq!(values.len(), n + 1);
+        assert_eq!(x_vec.len(), n + 1);
+
+        // get b such that 2^{b-1} <= 2s < 2^b and 
+        // b_bar such that 2^{b_bar-1} <= t < 2^b_bar
         let b = count_bits(s.to_bigint()) + 1;
         let b_bar = count_bits(t.to_bigint());
 
@@ -134,34 +148,26 @@ impl VarRange {
         let kzen_label = seed;
         let hash = Sha512::new().chain_bigint(&kzen_label).result_bigint();
         let H = &generate_random_point(&Converter::to_bytes(&hash));
-
-        // println!("b is {}", b.clone());
-        // println!("b_bar is {}", b_bar.clone());
-        // println!("n is {}", n.clone());
-
-        let gi = gi.to_vec();
-        let hi = hi.to_vec();
-
-        assert_eq!(gi.len(), n + 1);
-        assert_eq!(hi.len(), n + 1);
-        assert_eq!(values.len(), n + 1);
-        assert_eq!(x_vec.len(), n + 1);
-
+        
+        // v_hat_i = s - v_i, i in [n] and v_hat_n+1 = t- v_n+1
         let mut values_hat = (0..n)
             .map(|i| s.clone() - values[i].clone())
             .collect::<Vec<Scalar<Secp256k1>>>();
         values_hat.push(t.clone() - values[n].clone());
         
+        // calculate v_i + s, i in [n]
         let temp = values[n].clone();
         let mut values = (0..n)
             .map(|i| s.clone() + values[i].clone())
             .collect::<Vec<Scalar<Secp256k1>>>();
         values.push(temp);
-
+        
+        // x_hat = -x
         let x_vec_hat = (0..n+1)
             .map(|i| Scalar::<Secp256k1>::zero() - x_vec[i].clone())
             .collect::<Vec<Scalar<Secp256k1>>>();
         
+        // get vector g whose length is n*b+b_bar
         let mut g_vec: Vec<Point<Secp256k1>> = Vec::new();
         for j in 0..n {
             g_vec.push(gi[j].clone());
@@ -186,7 +192,6 @@ impl VarRange {
                 generate_random_point(&Converter::to_bytes(&hash_i))
             })
             .collect::<Vec<Point<Secp256k1>>>();
-
         g_vec.append(&mut ui);
 
         let mut A = H * &rho_a;
@@ -209,7 +214,6 @@ impl VarRange {
         let values_agg = values_n
             .iter()
             .fold(values[n].to_bigint(), |acc, x| acc.shl(b) + x.to_bigint());
-        
         values_hat_n.reverse();
         let values_hat_agg = values_hat_n
             .iter()
@@ -250,14 +254,6 @@ impl VarRange {
                 byte[0] == 1
             })
             .collect::<Vec<bool>>();
-
-        // print_bool_vec(values_bits.clone());
-        // print_bn_vec(a_vec.clone());
-        // print_bool_vec(values_hat_bits.clone());
-        // print_bn_vec(a_vec_hat.clone());
-
-        // print_bn_vec(b_vec.clone());
-        // print_bn_vec(b_vec_hat.clone());
         
         // construct c_vec and c_vec_hat
         let zero_vec = vec![BigInt::zero(); b - 2];
@@ -331,7 +327,6 @@ impl VarRange {
             });
         
         let y = Sha256::new().chain_points([&A, &A_hat, &B, &B_hat, &D]).result_scalar();
-        // let y = Scalar::<Secp256k1>::from_bigint(&BigInt::from(1));
         let y_bn = y.to_bigint();
         let one_fe = Scalar::<Secp256k1>::from(&one);
         let yi = iterate(one_fe.clone(), |i| i.clone() * &y)
@@ -343,12 +338,12 @@ impl VarRange {
                 .collect::<Vec<BigInt>>();
 
         let y_nb_plus_b_bar = (yi[n*b+b_bar - 1].clone() * y.clone()).to_bigint();
-        // assert_eq!(y_nb_plus_b_bar.clone(), BigInt::mod_pow(&y_bn, &BigInt::from((n*b+b_bar) as i32), order));
         let zero_vec_nb_plus_b_bar = vec![BigInt::zero(); n*b+b_bar];
         let y_nb_plus_b_bar_a_vec_hat = (0..n*b+b_bar)
             .map(|i| BigInt::mod_mul(&y_nb_plus_b_bar, &a_vec_hat[i], &order))
             .collect::<Vec<BigInt>>();
-
+        
+        // construct the poly L(X)
         let mut L_coeff_vec: Vec<Vec<BigInt>> = Vec::new();
         L_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
         L_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
@@ -360,9 +355,6 @@ impl VarRange {
         L_coeff_vec.push(c_vec);
         L_coeff_vec.push(c_vec_hat);
         L_coeff_vec.push(d_vec_bn);
-        // print_bn_vec(b_vec_hat.clone());
-        // print_bn_vec(L_coeff_vec[2].clone()); 
-        // assert_eq!(b_vec_hat.clone(), L_coeff_vec[2].clone());   
         
         // the lowest power is -4, so the offset is 4
         let L_poly = VecPoly::new(L_coeff_vec.clone(), order.clone(), 4);
@@ -373,8 +365,6 @@ impl VarRange {
         let two_vec_b_bar = (0..b_bar)
             .map(|i| BigInt::mod_pow(&two, &BigInt::from(i as u64), order))
             .collect::<Vec<BigInt>>();
-        // print_bn_vec(two_vec_b.clone());
-        // print_bn_vec(two_vec_b_bar.clone());
         let mut zero_vec_b = vec![BigInt::zero(); b];
         zero_vec_b[0] = one.clone();
         let mut zero_vec_b_bar = vec![BigInt::zero(); b_bar];
@@ -385,11 +375,9 @@ impl VarRange {
         let y_4_nb_plus_b_bar = BigInt::mod_pow(&y_nb_plus_b_bar, &BigInt::from(4), order);
         let y_3_nb_plus_b_bar_plus_n = BigInt::mod_mul(&y_3_nb_plus_b_bar, &yi[n].to_bigint(), order);
         let y_4_nb_plus_b_bar_plus_n = BigInt::mod_mul(&y_4_nb_plus_b_bar, &yi[n].to_bigint(), order);
-        // assert_eq!(y_3_nb_plus_b_bar_plus_n, BigInt::mod_pow(&y_bn, &BigInt::from((3*(n*b+b_bar)+n) as i32), order));
-        // assert_eq!(y_4_nb_plus_b_bar_plus_n, BigInt::mod_pow(&y_bn, &BigInt::from((4*(n*b+b_bar)+n) as i32), order));
         let mut temp_vec: Vec<BigInt>;
         
-        // R
+        // construct the poly R
         let r_neg_1_1 = (0..n*b+b_bar)
             .map(|i| BigInt::mod_mul(&y_2_nb_plus_b_bar, &yi[i].to_bigint(), order))
             .collect::<Vec<BigInt>>();
@@ -489,8 +477,6 @@ impl VarRange {
         R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
         R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
         R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        // print_vec_poly(L_coeff_vec.clone(), order.clone());
-        // print_vec_poly(R_coeff_vec.clone(), order.clone());
 
         let mut L_otimes_yi: Vec<Vec<BigInt>> = Vec::new();
         for j in 0..L_coeff_vec.len() {
@@ -500,10 +486,6 @@ impl VarRange {
 
             L_otimes_yi.push(temp_vec);
         }
-        // println!("=================================");
-        // print_vec_poly(L_otimes_yi.clone(), order.clone());
-        // assert_eq!(L_otimes_yi, L_coeff_vec);
-        // assert_eq!(0, 1);
 
         let mut temp_poly_coeff_vec: Vec<Vec<BigInt>> = Vec::new();
         for j in 0..L_otimes_yi.len() {
@@ -513,84 +495,87 @@ impl VarRange {
 
             temp_poly_coeff_vec.push(temp_vec);
         }
-        // println!("=================================");
-        // print_vec_poly(temp_poly_coeff_vec.clone(), order.clone());
 
         let temp_poly = VecPoly::new(temp_poly_coeff_vec, order.clone(), 4);
         let mut M_poly = L_poly.clone() * temp_poly;
-        // print_bn_vec(M_poly.clone());
 
         temp_vec = (0..n*b+b_bar)
             .map(|i| BigInt::mod_mul(&(y_2_nb_plus_b_bar.clone() + y_3_nb_plus_b_bar.clone()), &yi[i].to_bigint(), order))
             .collect::<Vec<BigInt>>();
         let one_vec = vec![one.clone(); n*b+b_bar];
 
-        // the 8th element is const
+        // the 8th element is const (i.e. the offset of M_poly is 8, but M[0]=M[1]=0) 
+        // the we need prove M[8] = 0
         M_poly[8] = BigInt::mod_sub(&M_poly[8], &(two.clone() * inner_product(&one_vec, &temp_vec, order)), order);
         
+        // M_poly[0] = M_plot[1] = 0, we need to commit the non-zero coeff
+        // i.e. M[2], ..., M[18], without M[8]
         let tau_vec = (2..M_poly.len())
             .map(|_| Scalar::<Secp256k1>::random())
             .collect::<Vec<Scalar<Secp256k1>>>();
-
         let mut T_vec = (2..M_poly.len())
             .map(|i| H * tau_vec[i-2].clone() + &g_vec[0] * Scalar::<Secp256k1>::from_bigint(&M_poly[i]))
             .collect::<Vec<Point<Secp256k1>>>();
         T_vec.remove(6);
 
-        let mut T_vec_input = (0..T_vec.len())
+        let mut T_vec_input_challenge = (0..T_vec.len())
             .map(|i| &T_vec[i])
             .collect::<Vec<&Point<Secp256k1>>>();
-        T_vec_input.push(&g_vec[0]);
-        T_vec_input.push(H);
-        let x: Scalar<Secp256k1> = Sha256::new().chain_points(T_vec_input).result_scalar();
+        T_vec_input_challenge.push(&g_vec[0]);
+        T_vec_input_challenge.push(H);
+        let challenge_x: Scalar<Secp256k1> = Sha256::new().chain_points(T_vec_input_challenge).result_scalar();
 
-        let L_bn = L_poly.clone().evaluate(&x.to_bigint());
+        let L_bn = L_poly.clone().evaluate(&challenge_x.to_bigint());
         let L = (0..L_bn.len())
             .map(|i| Scalar::<Secp256k1>::from_bigint(&L_bn[i]))
             .collect::<Vec<Scalar<Secp256k1>>>();
-
+        
+        // M_poly[0] = M_plot[1] = 0, we need to commit the non-zero coeff
+        // i.e. M[2], ..., M[18], without M[8]
         let mut tau_bn = BigInt::zero();
         let mut x_power;
         for i in 2..M_poly.len() {
             if i < 8 {
-                x_power = BigInt::mod_pow(&x.to_bigint(), &(order + BigInt::from((i as i32 - 9) as i32)), order);
+                x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(order + BigInt::from((i as i32 - 9) as i32)), order);
             } else if i == 8 {
                 continue;
             } else {
-                x_power = BigInt::mod_pow(&x.to_bigint(), &(BigInt::from((i - 8) as i32)), order);
+                x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(BigInt::from((i - 8) as i32)), order);
             }
             tau_bn = BigInt::mod_add(&tau_bn, &(tau_vec[i-2].to_bigint().clone() * x_power), order);
         }
         let tau = Scalar::<Secp256k1>::from_bigint(&tau_bn);
-
-        let x_neg_1 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - one.clone()), order);
-        let x_neg_2 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - two.clone()), order);
-        // assert_eq!(BigInt::mod_mul(&x_neg_1, &x.to_bigint(), order), one.clone());
-        let x_2 = BigInt::mod_pow(&x.to_bigint(), &two, order);
-        // assert_eq!(BigInt::mod_mul(&x_neg_2, &x_2, order), one.clone());
-        let x_5 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(5), order);
-        let mut rho_bn = BigInt::mod_mul(&rho_a.to_bigint(), &x.to_bigint(), order);
+        
+        // use Fermat's Little Theorem to find the inverse
+        let x_neg_1 = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() - one.clone()), order);
+        let x_neg_2 = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() - two.clone()), order);
+        let x_2 = BigInt::mod_pow(&challenge_x.to_bigint(), &two, order);
+        let x_5 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(5), order);
+        let mut rho_bn = BigInt::mod_mul(&rho_a.to_bigint(), &challenge_x.to_bigint(), order);
         rho_bn = BigInt::mod_add(&rho_bn, &BigInt::mod_mul(&rho_b.to_bigint(), &x_neg_1, order), order);
         rho_bn = BigInt::mod_add(&rho_bn, &BigInt::mod_mul(&(rho_a_hat.to_bigint()*y_nb_plus_b_bar.clone()), &x_2, order), order);
         rho_bn = BigInt::mod_add(&rho_bn, &BigInt::mod_mul(&rho_b_hat.to_bigint(), &x_neg_2, order), order);
         rho_bn = BigInt::mod_add(&rho_bn, &BigInt::mod_mul(&rho_d.to_bigint(), &x_5, order), order);
         let rho = Scalar::<Secp256k1>::from_bigint(&rho_bn);
         
-        let VKA: VecKnowledgeAg;
+        let AKV: AgKnowledgeVec;
         if n*b+b_bar <= 21 {
-            VKA = VecKnowledgeAg::LVec(L);
+            // if n*b+b_bar <= 21, V is L
+            AKV = AgKnowledgeVec::LVec(L);
         } else {
+            // otherwise we need to invoke IPA
             let R_poly = VecPoly::new(R_coeff_vec, order.clone(), 4);
-            let R = R_poly.evaluate(&x.to_bigint());
-
+            let R = R_poly.evaluate(&challenge_x.to_bigint());
+            
+            // evaluate M(x)
             let mut t_hat = BigInt::zero();
             for i in 2..M_poly.len() {
                 if i < 8 {
-                    x_power = BigInt::mod_pow(&x.to_bigint(), &(order + BigInt::from((i as i32 - 9) as i32)), order);
+                    x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(order + BigInt::from((i as i32 - 9) as i32)), order);
                 } else if i == 8 {
                     continue;
                 } else {
-                    x_power = BigInt::mod_pow(&x.to_bigint(), &(BigInt::from((i - 8) as i32)), order);
+                    x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(BigInt::from((i - 8) as i32)), order);
                 }
                 t_hat = BigInt::mod_add(&t_hat, &(M_poly[i].clone() * x_power), order);
             }
@@ -616,9 +601,10 @@ impl VarRange {
                 .collect::<Vec<BigInt>>();
 
             let kzen_label = seed + BigInt::from((n*b+b_bar) as u32);
-            let hash_i = Sha512::new().chain_bigint(&kzen_label).result_bigint();
-            let q = generate_random_point(&Converter::to_bytes(&hash_i));
-
+            let hash = Sha512::new().chain_bigint(&kzen_label).result_bigint();
+            let q = generate_random_point(&Converter::to_bytes(&hash));
+            
+            // ux = q^c
             let mut Hq_vec_input = (0..h_vec.len())
                 .map(|i| &h_vec[i])
                 .collect::<Vec<&Point<Secp256k1>>>();
@@ -636,8 +622,8 @@ impl VarRange {
             let Ar_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
             let Bl_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
             let Br_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
-            let ip = OpInnerProductArg::prove(&g_vec, &h_vec, &ux, &a_ipa_vec, &b_ipa_vec, Al_vec, Ar_vec, Bl_vec, Br_vec);
-            VKA = VecKnowledgeAg::IPA { t_hat: (t_hat), ip: (ip) };
+            let ip = InnerProductArg::prove(&g_vec, &h_vec, &ux, &a_ipa_vec, &b_ipa_vec, Al_vec, Ar_vec, Bl_vec, Br_vec);
+            AKV = AgKnowledgeVec::IPA { t_hat: (t_hat), ip: (ip) };
         }
 
         VarRange {
@@ -647,7 +633,7 @@ impl VarRange {
             B_hat,
             D,
             T_vec,
-            VKA,
+            AKV,
             tau,
             rho
         }
@@ -719,7 +705,6 @@ impl VarRange {
 
         g_vec.append(&mut ui);
 
-        // assert_eq!(self.L.len(), n*b+b_bar);
         assert_eq!(self.T_vec.len(), 16);
 
         let y = Sha256::new().chain_points([&self.A, &self.A_hat, &self.B, &self.B_hat, &self.D]).result_scalar();
@@ -750,7 +735,6 @@ impl VarRange {
         let y_4_nb_plus_b_bar_plus_n = BigInt::mod_mul(&y_4_nb_plus_b_bar, &yi[n].to_bigint(), order);
         let mut temp_vec: Vec<BigInt>;
         
-        // R
         let r_neg_1_1 = (0..n*b+b_bar)
             .map(|i| BigInt::mod_mul(&y_2_nb_plus_b_bar, &yi[i].to_bigint(), order))
             .collect::<Vec<BigInt>>();
@@ -861,10 +845,9 @@ impl VarRange {
         let x: Scalar<Secp256k1> = Sha256::new().chain_points(T_vec_input).result_scalar();
 
         let R = R_poly.evaluate(&x.to_bigint());
-        // println!("R[0] is {}", R[0]);
 
-        match &self.VKA {
-            VecKnowledgeAg::LVec(L) => {
+        match &self.AKV {
+            AgKnowledgeVec::LVec(L) => {
                 let L = L.clone();
                 assert_eq!(L.len(), n*b+b_bar);
 
@@ -885,16 +868,14 @@ impl VarRange {
                 let one_vec = vec![one.clone(); n*b+b_bar];
 
                 t_hat = BigInt::mod_sub(&t_hat, &(two.clone() * inner_product(&one_vec, &temp_vec, order)), order);
-                // println!("t_hat is {}", t_hat);
                 let t_hat = Scalar::<Secp256k1>::from_bigint(&t_hat);
-        
+                
                 let x_neg_1 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - one.clone()), order);
                 let x_neg_2 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - two.clone()), order);
                 let x_2 = BigInt::mod_pow(&x.to_bigint(), &two, order);
                 let x_3 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(3), order);
                 let x_4 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(4), order);
                 let x_5 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(5), order);
-                // println!("x is {}", x.to_bigint().clone());
         
                 let x_neg_2 = Scalar::<Secp256k1>::from_bigint(&x_neg_2);
                 let x_neg_1 = Scalar::<Secp256k1>::from_bigint(&x_neg_1);
@@ -943,7 +924,7 @@ impl VarRange {
                     Err(RangeProofError)
                 }
             }
-            VecKnowledgeAg::IPA { t_hat, ip } => {
+            AgKnowledgeVec::IPA { t_hat, ip } => {
                 let t_hat = Scalar::<Secp256k1>::from_bigint(t_hat);
                 let g_1_t_hat_h_tau_expect = &g_vec[0] * t_hat.clone() + H * self.tau.clone();
 
@@ -973,7 +954,6 @@ impl VarRange {
                     let x_3 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(3), order);
                     let x_4 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(4), order);
                     let x_5 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(5), order);
-                    // println!("x is {}", x.to_bigint().clone());
                 
                     let x_neg_2 = Scalar::<Secp256k1>::from_bigint(&x_neg_2);
                     let x_neg_1 = Scalar::<Secp256k1>::from_bigint(&x_neg_1);
@@ -995,7 +975,7 @@ impl VarRange {
                     }
                     P = &P + &self.D * x_5;
                     P = &P - H * self.rho.clone();
-
+                    
                     let mut Q = h_vec.iter().zip(R).fold(Point::<Secp256k1>::zero(), |acc, x| {
                         if x.1 != BigInt::zero() {
                             let Ri = Scalar::<Secp256k1>::from(x.1);
@@ -1008,8 +988,8 @@ impl VarRange {
                     Q = P.clone() + Q;
 
                     let kzen_label = seed + BigInt::from((n*b+b_bar) as u32);
-                    let hash_i = Sha512::new().chain_bigint(&kzen_label).result_bigint();
-                    let q = generate_random_point(&Converter::to_bytes(&hash_i));
+                    let hash = Sha512::new().chain_bigint(&kzen_label).result_bigint();
+                    let q = generate_random_point(&Converter::to_bytes(&hash));
 
                     let mut Hq_vec_input = (0..h_vec.len())
                         .map(|i| &h_vec[i])
@@ -1044,7 +1024,7 @@ impl VarRange {
 
 #[cfg(test)]
 mod test {
-    use curv::{arithmetic::Converter, cryptographic_primitives::hashing::DigestExt, elliptic::curves::{Point, Scalar, Secp256k1}, BigInt};
+    use curv::{arithmetic::{Converter, Samplable}, cryptographic_primitives::hashing::DigestExt, elliptic::curves::{Point, Scalar, Secp256k1}, BigInt};
     use sha2::{Digest, Sha512};
 
     use super::{generate_random_point, VarRange};
@@ -1070,9 +1050,9 @@ mod test {
         let t = s.clone() * s.clone();
 
         let mut v_vec = (0..n)
-            .map(|i| Scalar::<Secp256k1>::from(&BigInt::from(i as u32)))
+            .map(|_| Scalar::<Secp256k1>::from_bigint(&BigInt::sample_below(&s.to_bigint())))
             .collect::<Vec<Scalar<Secp256k1>>>();
-        v_vec.push(Scalar::<Secp256k1>::from_bigint(&BigInt::from((n * (n - 1) >> 1) as i32)));
+        v_vec.push(Scalar::<Secp256k1>::from_bigint(&BigInt::sample_below(&t.to_bigint())));
 
         let x_vec = (0..n+1)
             .map(|_| Scalar::<Secp256k1>::random())
@@ -1088,9 +1068,44 @@ mod test {
     }
 
     #[test]
-    pub fn test_varrange() {
+    pub fn test_batch_4_varrange_proof_32() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
-        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(100)), 20);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(32)), 4);
+    }
+    
+    #[test]
+    pub fn test_batch_4_varrange_proof_64() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(64)), 4);
+    }
+
+    #[test]
+    pub fn test_batch_4_varrange_proof_128() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(128)), 4);
+    }
+
+    #[test]
+    pub fn test_batch_4_varrange_proof_31() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(31)), 4);
+    }
+    
+    #[test]
+    pub fn test_batch_4_varrange_proof_63() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(63)), 4);
+    }
+
+    #[test]
+    pub fn test_batch_4_varrange_proof_127() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(127)), 4);
     }
 }

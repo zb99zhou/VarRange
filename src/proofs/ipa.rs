@@ -9,7 +9,7 @@ use crate::proofs::vecpoly::inner_product;
 use crate::Errors::InnerProductError;
 use crate::Errors;
 
-pub struct OpInnerProductArg {
+pub struct InnerProductArg {
     pub(super) Al: Vec<Point<Secp256k1>>,
     pub(super) Ar: Vec<Point<Secp256k1>>,
     pub(super) Bl: Vec<Point<Secp256k1>>,
@@ -18,7 +18,7 @@ pub struct OpInnerProductArg {
     pub(super) b_vec: Vec<BigInt>
 }
 
-impl OpInnerProductArg {
+impl InnerProductArg {
     pub fn prove(
         G: &[Point<Secp256k1>],
         H: &[Point<Secp256k1>],
@@ -29,7 +29,7 @@ impl OpInnerProductArg {
         mut Ar_vec: Vec<Point<Secp256k1>>,
         mut Bl_vec: Vec<Point<Secp256k1>>,
         mut Br_vec: Vec<Point<Secp256k1>>
-    ) -> OpInnerProductArg {
+    ) -> InnerProductArg {
         let n_hat = G.len();
 
         // All of the input vectors must have the same length.
@@ -135,10 +135,10 @@ impl OpInnerProductArg {
             Ar_vec.push(A_r);
             Bl_vec.push(B_l);
             Br_vec.push(B_r);
-            return OpInnerProductArg::prove(&G_new, &H_new, ux, &a_new, &b_new, Al_vec, Ar_vec, Bl_vec, Br_vec);
+            return InnerProductArg::prove(&G_new, &H_new, ux, &a_new, &b_new, Al_vec, Ar_vec, Bl_vec, Br_vec);
         }
 
-        OpInnerProductArg {
+        InnerProductArg {
             Al: Al_vec,
             Ar: Ar_vec,
             Bl: Bl_vec,
@@ -201,7 +201,7 @@ impl OpInnerProductArg {
             let Qex = Q * ex;
             let Q_tag = Blex_sq + Qex + self.Br[0].clone();
 
-            let ipa = OpInnerProductArg {
+            let ipa = InnerProductArg {
                 Al: (&self.Al[1..]).to_vec(),
                 Ar: (&self.Ar[1..]).to_vec(),
                 Bl: (&self.Bl[1..]).to_vec(),
@@ -249,7 +249,7 @@ mod test {
     use sha2::{Digest, Sha512};
 
     use crate::proofs::vecpoly::inner_product;
-    use super::OpInnerProductArg;
+    use super::InnerProductArg;
 
     fn test_helper(n: usize) {
         let order = Scalar::<Secp256k1>::group_order();
@@ -314,13 +314,58 @@ mod test {
         let Ar_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
         let Bl_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
         let Br_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
-        let ipa = OpInnerProductArg::prove(&g_vec, &h_vec, &Gx, &a, &b, Al_vec, Ar_vec, Bl_vec, Br_vec);
-        let result = OpInnerProductArg::verify(&ipa, &g_vec, &h_vec, &Gx, &P, &Q);
+        let ipa = InnerProductArg::prove(&g_vec, &h_vec, &Gx, &a, &b, Al_vec, Ar_vec, Bl_vec, Br_vec);
+        let result = InnerProductArg::verify(&ipa, &g_vec, &h_vec, &Gx, &P, &Q);
         assert!(result.is_ok());
     }
 
     #[test]
-    pub fn test_ipa() {
+    pub fn test_ipa_2() {
+        test_helper(2);
+    }
+    
+    #[test]
+    pub fn test_ipa_4() {
+        test_helper(4);
+    }
+    
+    #[test]
+    pub fn test_ipa_8() {
+        test_helper(8);
+    }
+    
+    #[test]
+    pub fn test_ipa_16() {
+        test_helper(16);
+    }
+
+    #[test]
+    pub fn test_ipa_32() {
+        test_helper(32);
+    }
+
+    #[test]
+    pub fn test_ipa_64() {
+        test_helper(64);
+    }
+
+    #[test]
+    pub fn test_ipa_128() {
+        test_helper(128);
+    }
+
+    #[test]
+    pub fn test_ipa_256() {
         test_helper(256);
+    }
+
+    #[test]
+    pub fn test_ipa_512() {
+        test_helper(512);
+    }
+
+    #[test]
+    pub fn test_ipa_1024() {
+        test_helper(1024);
     }
 }
