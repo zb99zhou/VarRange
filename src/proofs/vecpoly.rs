@@ -74,7 +74,7 @@ impl Mul for VecPoly {
         let mut result_coeffs = vec![BigInt::zero(); self.coeffs.len() + other.coeffs.len() - 1];
         for (i, coeff_vec1) in self.coeffs.iter().enumerate() {
             for (j, coeff_vec2) in other.coeffs.iter().enumerate() {
-                result_coeffs[i + j] = BigInt::mod_add(&result_coeffs[i + j], &inner_product(&coeff_vec1, &coeff_vec2, &self.modulus), &self.modulus);
+                result_coeffs[i + j] = BigInt::mod_add(&result_coeffs[i + j], &inner_product(coeff_vec1, coeff_vec2, &self.modulus), &self.modulus);
             }
         }
         result_coeffs

@@ -202,10 +202,10 @@ impl InnerProductArg {
             let Q_tag = Blex_sq + Qex + self.Br[0].clone();
 
             let ipa = InnerProductArg {
-                Al: (&self.Al[1..]).to_vec(),
-                Ar: (&self.Ar[1..]).to_vec(),
-                Bl: (&self.Bl[1..]).to_vec(),
-                Br: (&self.Br[1..]).to_vec(),
+                Al: self.Al[1..].to_vec(),
+                Ar: self.Ar[1..].to_vec(),
+                Bl: self.Bl[1..].to_vec(),
+                Br: self.Br[1..].to_vec(),
                 a_vec: self.a_vec.clone(),
                 b_vec: self.b_vec.clone()
             };
