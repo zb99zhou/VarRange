@@ -246,6 +246,7 @@ impl InnerProductArg {
 #[cfg(test)]
 mod test {
     use curv::{arithmetic::Converter, cryptographic_primitives::hashing::DigestExt, elliptic::curves::{secp256_k1::hash_to_curve::generate_random_point, Point, Scalar, Secp256k1}, BigInt};
+    use curv::arithmetic::One;
     use sha2::{Digest, Sha512};
 
     use crate::proofs::vecpoly::inner_product;
@@ -273,7 +274,7 @@ mod test {
             })
             .collect::<Vec<Point<Secp256k1>>>();
 
-        let label = BigInt::from(1);
+        let label = BigInt::one();
         let hash = Sha512::new().chain_bigint(&label).result_bigint();
         let Gx = generate_random_point(&Converter::to_bytes(&hash));
 

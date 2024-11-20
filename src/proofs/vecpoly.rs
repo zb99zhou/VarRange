@@ -24,16 +24,18 @@ impl VecPoly {
         for i in 0..x_power.len() {
             let mut exp = BigInt::from(i as i32 - self.offset);
             if exp < BigInt::zero() {
-                exp = exp + self.modulus.clone() - BigInt::from(1);
+                exp = exp + self.modulus.clone() - BigInt::one();
             }
             x_power[i] = BigInt::mod_pow(x, &exp, &self.modulus);
         }
 
         for i in 0..n {
             for j in 0..self.coeffs.len() {
-                out[i] = BigInt::mod_add(&out[i], 
-                                         &BigInt::mod_mul(&self.coeffs[j][i], &x_power[j], &self.modulus), 
-                                         &self.modulus);
+                out[i] = BigInt::mod_add(
+                    &out[i],
+                    &BigInt::mod_mul(&self.coeffs[j][i], &x_power[j], &self.modulus),
+                    &self.modulus
+                );
             }
         }
         out
@@ -97,6 +99,7 @@ pub fn inner_product(a: &[BigInt], b: &[BigInt], modulus: &BigInt) -> BigInt {
 
 #[cfg(test)]
 mod tests {
+    use curv::arithmetic::{One, Zero};
     use curv::BigInt;
     use super::VecPoly;
 
@@ -118,17 +121,8 @@ mod tests {
     pub fn test_vec_poly() {
         let mut coeff1: Vec<Vec<BigInt>> = Vec::new();
 
-        let mut row0 = Vec::new();
-        row0.push(BigInt::from(0));
-        row0.push(BigInt::from(0));
-        row0.push(BigInt::from(0));
-        row0.push(BigInt::from(0));
-
-        let mut row1 = Vec::new();
-        row1.push(BigInt::from(1));
-        row1.push(BigInt::from(1));
-        row1.push(BigInt::from(1));
-        row1.push(BigInt::from(1));
+        let row0 = vec![BigInt::zero(); 4];
+        let row1 = vec![BigInt::one(); 4];
 
         coeff1.push(row0.clone());
         coeff1.push(row0.clone());

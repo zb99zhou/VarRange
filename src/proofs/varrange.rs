@@ -202,7 +202,7 @@ impl VarRange {
 
         let order = Scalar::<Secp256k1>::group_order();
         let two = BigInt::from(2);
-        let one = BigInt::from(1);
+        let one = BigInt::one();
         
         // get the first n val in the values and values_hat
         // which bit_length is b
@@ -344,18 +344,19 @@ impl VarRange {
             .collect::<Vec<BigInt>>();
         
         // construct the poly L(X)
-        let mut L_coeff_vec: Vec<Vec<BigInt>> = Vec::new();
-        L_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        L_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        L_coeff_vec.push(b_vec_hat.clone());
-        L_coeff_vec.push(b_vec);
-        L_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        L_coeff_vec.push(a_vec);
-        L_coeff_vec.push(y_nb_plus_b_bar_a_vec_hat);
-        L_coeff_vec.push(c_vec);
-        L_coeff_vec.push(c_vec_hat);
-        L_coeff_vec.push(d_vec_bn);
-        
+        let L_coeff_vec: Vec<Vec<BigInt>> = vec![
+            zero_vec_nb_plus_b_bar.clone(),
+            zero_vec_nb_plus_b_bar.clone(),
+            b_vec_hat.clone(),
+            b_vec,
+            zero_vec_nb_plus_b_bar.clone(),
+            a_vec,
+            y_nb_plus_b_bar_a_vec_hat,
+            c_vec,
+            c_vec_hat,
+            d_vec_bn,
+        ];
+
         // the lowest power is -4, so the offset is 4
         let L_poly = VecPoly::new(L_coeff_vec.clone(), order.clone(), 4);
 
@@ -466,17 +467,18 @@ impl VarRange {
             .collect::<Vec<BigInt>>();
         r_neg_4.append(&mut temp_vec);
         
-        let mut R_coeff_vec: Vec<Vec<BigInt>> = Vec::new();
-        R_coeff_vec.push(r_neg_4);
-        R_coeff_vec.push(r_neg_3);
-        R_coeff_vec.push(r_neg_2);
-        R_coeff_vec.push(r_neg_1);
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        R_coeff_vec.push(r_1);
-        R_coeff_vec.push(r_2);
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
+        let R_coeff_vec: Vec<Vec<BigInt>> = vec![
+            r_neg_4,
+            r_neg_3,
+            r_neg_2,
+            r_neg_1,
+            zero_vec_nb_plus_b_bar.clone(),
+            r_1,
+            r_2,
+            zero_vec_nb_plus_b_bar.clone(),
+            zero_vec_nb_plus_b_bar.clone(),
+            zero_vec_nb_plus_b_bar.clone(),
+        ];
 
         let mut L_otimes_yi: Vec<Vec<BigInt>> = Vec::new();
         for j in 0..L_coeff_vec.len() {
@@ -673,7 +675,7 @@ impl VarRange {
 
         let order = Scalar::<Secp256k1>::group_order();
         let two = BigInt::from(2);
-        let one = BigInt::from(1);
+        let one = BigInt::one();
 
         assert_eq!(gi.len(), n + 1);
         assert_eq!(hi.len(), n + 1);
@@ -823,18 +825,18 @@ impl VarRange {
             .collect::<Vec<BigInt>>();
         r_neg_4.append(&mut temp_vec);
         
-        let mut R_coeff_vec: Vec<Vec<BigInt>> = Vec::new();
-        R_coeff_vec.push(r_neg_4);
-        R_coeff_vec.push(r_neg_3);
-        R_coeff_vec.push(r_neg_2);
-        R_coeff_vec.push(r_neg_1);
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        R_coeff_vec.push(r_1);
-        R_coeff_vec.push(r_2);
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-        R_coeff_vec.push(zero_vec_nb_plus_b_bar.clone());
-
+        let R_coeff_vec: Vec<Vec<BigInt>> = vec![
+            r_neg_4,
+            r_neg_3,
+            r_neg_2,
+            r_neg_1,
+            zero_vec_nb_plus_b_bar.clone(),
+            r_1,
+            r_2,
+            zero_vec_nb_plus_b_bar.clone(),
+            zero_vec_nb_plus_b_bar.clone(),
+            zero_vec_nb_plus_b_bar,
+        ];
         let R_poly = VecPoly::new(R_coeff_vec, order.clone(), 4);
 
         let mut T_vec_input = (0..self.T_vec.len())
@@ -890,10 +892,8 @@ impl VarRange {
                 g_vec_L = &g_vec_L + &self.A_hat * y_nb_plus_b_bar * x_2;
                 g_vec_L = &g_vec_L + &self.B_hat * x_neg_2;
                 for j in 0..n+1 {
-                    g_vec_L = &g_vec_L + &C_vec[j] * x_3.clone();
-                }
-                for j in 0..n+1 {
-                    g_vec_L = &g_vec_L + &C_vec_hat[j] * x_4.clone();
+                    g_vec_L = &g_vec_L + &C_vec[j] * &x_3;
+                    g_vec_L = &g_vec_L + &C_vec_hat[j] * &x_4;
                 }
                 g_vec_L = &g_vec_L + &self.D * x_5;
                 g_vec_L = &g_vec_L - H * self.rho.clone();
@@ -968,10 +968,8 @@ impl VarRange {
                     P = &P + &self.A_hat * y_nb_plus_b_bar * x_2;
                     P = &P + &self.B_hat * x_neg_2;
                     for j in 0..n+1 {
-                        P = &P + &C_vec[j] * x_3.clone();
-                    }
-                    for j in 0..n+1 {
-                        P = &P + &C_vec_hat[j] * x_4.clone();
+                        P = &P + &C_vec[j] * &x_3;
+                        P = &P + &C_vec_hat[j] * &x_4;
                     }
                     P = &P + &self.D * x_5;
                     P = &P - H * self.rho.clone();
