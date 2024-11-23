@@ -8,10 +8,10 @@ use std::ops::{Shl, Shr};
 use sha2::{Sha256, Sha512};
 use curv::cryptographic_primitives::hashing::{Digest, DigestExt};
 use itertools::iterate;
-use crate::Errors::RangeProofError;
+use crate::Errors::{RangeProofError, VarRangeError};
 use crate::Errors;
 
-use super::{ipa::InnerProductArg, vecpoly::{inner_product, VecPoly}};
+use super::{ipa::InnerProductArg, sigma_pedersen::SigmaPedersenProof, vec_poly::{inner_product, VecPoly}};
 
 // an argument of knowledge of the vector "L"
 // when n*b+b_bar <= 21, this enumeration type is the vector "L" itself
@@ -115,7 +115,7 @@ pub fn print_vec_poly(bn_vec: Vec<Vec<BigInt>>, modulus: BigInt) {
 }
 
 impl VarRange {
-    pub fn prove(
+    pub fn range_prove(
         gi: &[Point<Secp256k1>],
         hi: &[Point<Secp256k1>],
         values: Vec<Scalar<Secp256k1>>,
@@ -123,7 +123,7 @@ impl VarRange {
         s: Scalar<Secp256k1>,
         t: Scalar<Secp256k1>,
         n: usize,
-        _C_vec: &[Point<Secp256k1>],
+        _B_vec: &[Point<Secp256k1>],
         seed: &BigInt
     ) -> VarRange {
         let gi = gi.to_vec();
@@ -641,11 +641,11 @@ impl VarRange {
         }
     }
 
-    pub fn verify(
+    pub fn range_verify(
         &self,
         gi: &[Point<Secp256k1>],
         hi: &[Point<Secp256k1>],
-        C_vec: &[Point<Secp256k1>],
+        B_vec: &[Point<Secp256k1>],
         s: Scalar<Secp256k1>,
         t: Scalar<Secp256k1>,
         n: usize,
@@ -660,7 +660,7 @@ impl VarRange {
 
         let gi = gi.to_vec();
         let hi = hi.to_vec();
-        let C_vec = C_vec.to_vec();
+        let C_vec = B_vec.to_vec();
 
         let mut C_vec_hat = (0..n)
             .map(|i| &gi[i] * s.clone() - C_vec[i].clone())
@@ -1018,6 +1018,42 @@ impl VarRange {
             }
         }
     }
+
+    pub fn prove(
+        gi: &[Point<Secp256k1>],
+        hi: &[Point<Secp256k1>],
+        values: Vec<Scalar<Secp256k1>>,
+        x_vec: Vec<Scalar<Secp256k1>>,
+        s: Scalar<Secp256k1>,
+        t: Scalar<Secp256k1>,
+        n: usize,
+        B_vec: &[Point<Secp256k1>],
+        seed: &BigInt
+    ) -> (SigmaPedersenProof, VarRange) {
+        let sub_proof_1 = SigmaPedersenProof::prove(&values, &x_vec, gi, hi, n+1);
+        let sub_proof_2 = VarRange::range_prove(gi, hi, values, x_vec, s, t, n, B_vec, seed);
+        (sub_proof_1, sub_proof_2)
+    }
+
+    pub fn verify(
+        &self,
+        sub_proof1: &SigmaPedersenProof,
+        gi: &[Point<Secp256k1>],
+        hi: &[Point<Secp256k1>],
+        B_vec: &[Point<Secp256k1>],
+        s: Scalar<Secp256k1>,
+        t: Scalar<Secp256k1>,
+        n: usize,
+        seed: &BigInt
+    ) -> Result<(), Errors> {
+        let sub_res1 = sub_proof1.verify(B_vec, gi, hi, n+1);
+        let sub_res2 = self.range_verify(gi, hi, B_vec, s, t, n, seed);
+        if sub_res1.is_ok() && sub_res2.is_ok() {
+            Ok(())
+        } else {
+            Err(VarRangeError)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1026,6 +1062,44 @@ mod test {
     use sha2::{Digest, Sha512};
 
     use super::{generate_random_point, VarRange};
+
+    pub fn test_helper_range_proof(seed: &BigInt, s: Scalar<Secp256k1>, n: usize) {
+        let gi = (0..n+1)
+            .map(|i| {
+                let kzen_label_i = BigInt::from(i as u32) + seed;
+                let hash_i = Sha512::new().chain_bigint(&kzen_label_i).result_bigint();
+                generate_random_point(&Converter::to_bytes(&hash_i))
+            })
+            .collect::<Vec<Point<Secp256k1>>>();
+
+        // can run in parallel to gi:
+        let hi = (0..n+1)
+            .map(|i| {
+                let kzen_label_j = BigInt::from(n as u32) + BigInt::from(i as u32) + seed;
+                let hash_j = Sha512::new().chain_bigint(&kzen_label_j).result_bigint();
+                generate_random_point(&Converter::to_bytes(&hash_j))
+            })
+            .collect::<Vec<Point<Secp256k1>>>();
+
+        let t = s.clone() * s.clone();
+
+        let mut v_vec = (0..n)
+            .map(|_| Scalar::<Secp256k1>::from_bigint(&BigInt::sample_below(&s.to_bigint())))
+            .collect::<Vec<Scalar<Secp256k1>>>();
+        v_vec.push(Scalar::<Secp256k1>::from_bigint(&BigInt::sample_below(&t.to_bigint())));
+
+        let x_vec = (0..n+1)
+            .map(|_| Scalar::<Secp256k1>::random())
+            .collect::<Vec<Scalar<Secp256k1>>>();
+
+        let C_vec = (0..n+1)
+            .map(|i| &gi[i] * v_vec[i].clone() + &hi[i] * x_vec[i].clone())
+            .collect::<Vec<Point<Secp256k1>>>();
+
+        let range_proof = VarRange::range_prove(&gi, &hi, v_vec, x_vec, s.clone(), t.clone(), n, &C_vec, &(seed + BigInt::from((2*n+2) as i32)));
+        let result = VarRange::range_verify(&range_proof, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
+        assert!(result.is_ok());
+    }
 
     pub fn test_helper(seed: &BigInt, s: Scalar<Secp256k1>, n: usize) {
         let gi = (0..n+1)
@@ -1061,7 +1135,7 @@ mod test {
             .collect::<Vec<Point<Secp256k1>>>();
 
         let varrange_proof = VarRange::prove(&gi, &hi, v_vec, x_vec, s.clone(), t.clone(), n, &C_vec, &(seed + BigInt::from((2*n+2) as i32)));
-        let result = VarRange::verify(&varrange_proof, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
+        let result = VarRange::verify(&varrange_proof.1, &varrange_proof.0, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
         assert!(result.is_ok());
     }
 
@@ -1069,39 +1143,60 @@ mod test {
     pub fn test_batch_4_varrange_proof_32() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
-        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(32)), 4);
+        test_helper_range_proof(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(32)), 4);
     }
     
     #[test]
     pub fn test_batch_4_varrange_proof_64() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
-        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(64)), 4);
+        test_helper_range_proof(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(64)), 4);
     }
 
     #[test]
     pub fn test_batch_4_varrange_proof_128() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
-        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(128)), 4);
+        test_helper_range_proof(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(128)), 4);
     }
 
     #[test]
     pub fn test_batch_4_varrange_proof_31() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
-        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(31)), 4);
+        test_helper_range_proof(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(31)), 4);
     }
     
     #[test]
     pub fn test_batch_4_varrange_proof_63() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
-        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(63)), 4);
+        test_helper_range_proof(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(63)), 4);
     }
 
     #[test]
     pub fn test_batch_4_varrange_proof_127() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper_range_proof(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(127)), 4);
+    }
+
+    #[test]
+    pub fn test_batch_4_varrange_31() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(31)), 4);
+    }
+
+    #[test]
+    pub fn test_batch_4_varrange_63() {
+        let KZen: &[u8] = &[75, 90, 101, 110];
+        let kzen_label = BigInt::from_bytes(KZen);
+        test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(63)), 4);
+    }
+
+    #[test]
+    pub fn test_batch_4_varrange_127() {
         let KZen: &[u8] = &[75, 90, 101, 110];
         let kzen_label = BigInt::from_bytes(KZen);
         test_helper(&kzen_label, Scalar::<Secp256k1>::from_bigint(&BigInt::from(127)), 4);

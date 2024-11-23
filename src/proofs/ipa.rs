@@ -4,7 +4,7 @@ use curv::{cryptographic_primitives::hashing::DigestExt, elliptic::curves::{secp
 use curv::arithmetic::traits::*;
 use sha2::{Digest, Sha256};
 
-use crate::proofs::vecpoly::inner_product;
+use crate::proofs::vec_poly::inner_product;
 
 use crate::Errors::InnerProductError;
 use crate::Errors;
@@ -249,7 +249,7 @@ mod test {
     use curv::arithmetic::One;
     use sha2::{Digest, Sha512};
 
-    use crate::proofs::vecpoly::inner_product;
+    use crate::proofs::vec_poly::inner_product;
     use super::InnerProductArg;
 
     fn test_helper(n: usize) {
