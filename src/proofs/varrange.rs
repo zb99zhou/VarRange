@@ -1,14 +1,14 @@
 #![allow(non_snake_case)]
 
 use generic_array::typenum::Unsigned;
-use curv::{elliptic::curves::{secp256_k1::Secp256k1, Curve, ECPoint, Point, Scalar}, BigInt};
+use curv::{cryptographic_primitives::hashing::DigestExt, elliptic::curves::{secp256_k1::Secp256k1, Curve, ECPoint, Point, Scalar}, BigInt};
 use curv::arithmetic::traits::*;
 use generic_array::GenericArray;
+use merlin::Transcript;
+use sha2::{Digest, Sha512};
 use std::ops::{Shl, Shr};
-use sha2::{Sha256, Sha512};
-use curv::cryptographic_primitives::hashing::{Digest, DigestExt};
 use itertools::iterate;
-use crate::Errors::{RangeProofError, VarRangeError};
+use crate::{proofs::transcript::TranscriptProtocol, Errors::{RangeProofError, VarRangeError}};
 use crate::Errors;
 
 use super::{ipa::InnerProductArg, sigma_pedersen::SigmaPedersenProof, vec_poly::{inner_product, VecPoly}};
@@ -116,6 +116,7 @@ pub fn print_vec_poly(bn_vec: Vec<Vec<BigInt>>, modulus: BigInt) {
 
 impl VarRange {
     pub fn range_prove(
+        transcript: &mut Transcript,
         gi: &[Point<Secp256k1>],
         hi: &[Point<Secp256k1>],
         values: Vec<Scalar<Secp256k1>>,
@@ -123,7 +124,7 @@ impl VarRange {
         s: Scalar<Secp256k1>,
         t: Scalar<Secp256k1>,
         n: usize,
-        _B_vec: &[Point<Secp256k1>],
+        B_vec: &[Point<Secp256k1>],
         seed: &BigInt
     ) -> VarRange {
         let gi = gi.to_vec();
@@ -133,11 +134,15 @@ impl VarRange {
         assert_eq!(hi.len(), n + 1);
         assert_eq!(values.len(), n + 1);
         assert_eq!(x_vec.len(), n + 1);
+        assert_eq!(B_vec.len(), n + 1);
 
         // get b such that 2^{b-1} <= 2s < 2^b and 
         // b_bar such that 2^{b_bar-1} <= t < 2^b_bar
         let b = count_bits(s.to_bigint()) + 1;
         let b_bar = count_bits(t.to_bigint());
+
+        transcript.varrange_domain_sep(n as u64, b as u64, b_bar as u64);
+        transcript.append_points_array(b"B_vec", B_vec);
 
         let rho_a = Scalar::<Secp256k1>::random();
         let rho_a_hat = Scalar::<Secp256k1>::random();
@@ -325,8 +330,14 @@ impl VarRange {
                 index += 1;
                 acc + g_vec_i_di
             });
+
+        transcript.append_point(b"A", &A);
+        transcript.append_point(b"A_hat", &A_hat);
+        transcript.append_point(b"B", &B);
+        transcript.append_point(b"B_hat", &B_hat);
+        transcript.append_point(b"D", &D);
         
-        let y = Sha256::new().chain_points([&A, &A_hat, &B, &B_hat, &D]).result_scalar();
+        let y = transcript.challenge_scalar(b"y");
         let y_bn = y.to_bigint();
         let one_fe = Scalar::<Secp256k1>::from(&one);
         let yi = iterate(one_fe.clone(), |i| i.clone() * &y)
@@ -520,12 +531,8 @@ impl VarRange {
             .collect::<Vec<Point<Secp256k1>>>();
         T_vec.remove(6);
 
-        let mut T_vec_input_challenge = (0..T_vec.len())
-            .map(|i| &T_vec[i])
-            .collect::<Vec<&Point<Secp256k1>>>();
-        T_vec_input_challenge.push(&g_vec[0]);
-        T_vec_input_challenge.push(H);
-        let challenge_x: Scalar<Secp256k1> = Sha256::new().chain_points(T_vec_input_challenge).result_scalar();
+        transcript.append_points_array(b"T_vec", &T_vec);
+        let challenge_x: Scalar<Secp256k1> = transcript.challenge_scalar(b"x");
 
         let L_bn = L_poly.clone().evaluate(&challenge_x.to_bigint());
         let L = (0..L_bn.len())
@@ -559,6 +566,9 @@ impl VarRange {
         rho_bn = BigInt::mod_add(&rho_bn, &BigInt::mod_mul(&rho_b_hat.to_bigint(), &x_neg_2, order), order);
         rho_bn = BigInt::mod_add(&rho_bn, &BigInt::mod_mul(&rho_d.to_bigint(), &x_5, order), order);
         let rho = Scalar::<Secp256k1>::from_bigint(&rho_bn);
+
+        transcript.append_scalar(b"tau", &tau);
+        transcript.append_scalar(b"rho", &rho);
         
         let AKV: AgKnowledgeVec;
         if n*b+b_bar <= 21 {
@@ -607,11 +617,9 @@ impl VarRange {
             let q = generate_random_point(&Converter::to_bytes(&hash));
             
             // ux = q^c
-            let mut Hq_vec_input = (0..h_vec.len())
-                .map(|i| &h_vec[i])
-                .collect::<Vec<&Point<Secp256k1>>>();
-            Hq_vec_input.push(&q);
-            let cx: Scalar<Secp256k1> = Sha256::new().chain_points(Hq_vec_input).result_scalar();
+            transcript.append_points_array(b"g_vec", &g_vec);
+            transcript.append_points_array(b"h_vec", &h_vec);
+            let cx: Scalar<Secp256k1> = transcript.challenge_scalar(b"c");
             let ux = &q * cx;
 
             // pad
@@ -624,7 +632,7 @@ impl VarRange {
             let Ar_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
             let Bl_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
             let Br_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
-            let ip = InnerProductArg::prove(&g_vec, &h_vec, &ux, &a_ipa_vec, &b_ipa_vec, Al_vec, Ar_vec, Bl_vec, Br_vec);
+            let ip = InnerProductArg::prove(transcript, &g_vec, &h_vec, &ux, &a_ipa_vec, &b_ipa_vec, Al_vec, Ar_vec, Bl_vec, Br_vec);
             AKV = AgKnowledgeVec::IPA { t_hat: (t_hat), ip: (ip) };
         }
 
@@ -643,6 +651,7 @@ impl VarRange {
 
     pub fn range_verify(
         &self,
+        transcript: &mut Transcript,
         gi: &[Point<Secp256k1>],
         hi: &[Point<Secp256k1>],
         B_vec: &[Point<Secp256k1>],
@@ -654,31 +663,35 @@ impl VarRange {
         let b = count_bits(s.to_bigint()) + 1;
         let b_bar = count_bits(t.to_bigint());
 
+        assert_eq!(gi.len(), n + 1);
+        assert_eq!(hi.len(), n + 1);
+        assert_eq!(B_vec.len(), n + 1);
+        
+        transcript.varrange_domain_sep(n as u64, b as u64, b_bar as u64);
+        transcript.append_points_array(b"B_vec", B_vec);
+
         let kzen_label = seed;
         let hash = Sha512::new().chain_bigint(kzen_label).result_bigint();
         let H = &generate_random_point(&Converter::to_bytes(&hash));
 
         let gi = gi.to_vec();
         let hi = hi.to_vec();
-        let C_vec = B_vec.to_vec();
+        let B_vec = B_vec.to_vec();
 
         let mut C_vec_hat = (0..n)
-            .map(|i| &gi[i] * s.clone() - C_vec[i].clone())
+            .map(|i| &gi[i] * s.clone() - B_vec[i].clone())
             .collect::<Vec<Point<Secp256k1>>>();
-        C_vec_hat.push(&gi[n] * t.clone() - C_vec[n].clone());
+        C_vec_hat.push(&gi[n] * t.clone() - B_vec[n].clone());
         
-        let temp = C_vec[n].clone();
+        let temp = B_vec[n].clone();
         let mut C_vec = (0..n)
-            .map(|i| &gi[i] * s.clone() + C_vec[i].clone())
+            .map(|i| &gi[i] * s.clone() + B_vec[i].clone())
             .collect::<Vec<Point<Secp256k1>>>();
         C_vec.push(temp);
 
         let order = Scalar::<Secp256k1>::group_order();
         let two = BigInt::from(2);
         let one = BigInt::one();
-
-        assert_eq!(gi.len(), n + 1);
-        assert_eq!(hi.len(), n + 1);
 
         let mut g_vec: Vec<Point<Secp256k1>> = Vec::new();
         for j in 0..n {
@@ -709,7 +722,13 @@ impl VarRange {
 
         assert_eq!(self.T_vec.len(), 16);
 
-        let y = Sha256::new().chain_points([&self.A, &self.A_hat, &self.B, &self.B_hat, &self.D]).result_scalar();
+        transcript.append_point(b"A", &self.A);
+        transcript.append_point(b"A_hat", &self.A_hat);
+        transcript.append_point(b"B", &self.B);
+        transcript.append_point(b"B_hat", &self.B_hat);
+        transcript.append_point(b"D", &self.D);
+
+        let y = transcript.challenge_scalar(b"y");
         let y_bn = y.to_bigint();
         let one_fe = Scalar::<Secp256k1>::from(&one);
         let yi = iterate(one_fe.clone(), |i| i.clone() * &y)
@@ -839,15 +858,14 @@ impl VarRange {
         ];
         let R_poly = VecPoly::new(R_coeff_vec, order.clone(), 4);
 
-        let mut T_vec_input = (0..self.T_vec.len())
-            .map(|i| &self.T_vec[i])
-            .collect::<Vec<&Point<Secp256k1>>>();
-        T_vec_input.push(&g_vec[0]);
-        T_vec_input.push(H);
-        let x: Scalar<Secp256k1> = Sha256::new().chain_points(T_vec_input).result_scalar();
+        transcript.append_points_array(b"T_vec", &self.T_vec);
+        let challenge_x: Scalar<Secp256k1> = transcript.challenge_scalar(b"x");
 
-        let R = R_poly.evaluate(&x.to_bigint());
-
+        let R = R_poly.evaluate(&challenge_x.to_bigint());
+        
+        transcript.append_scalar(b"tau", &self.tau);
+        transcript.append_scalar(b"rho", &self.rho);
+        
         match &self.AKV {
             AgKnowledgeVec::LVec(L) => {
                 let L = L.clone();
@@ -872,12 +890,12 @@ impl VarRange {
                 t_hat = BigInt::mod_sub(&t_hat, &(two.clone() * inner_product(&one_vec, &temp_vec, order)), order);
                 let t_hat = Scalar::<Secp256k1>::from_bigint(&t_hat);
                 
-                let x_neg_1 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - one.clone()), order);
-                let x_neg_2 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - two.clone()), order);
-                let x_2 = BigInt::mod_pow(&x.to_bigint(), &two, order);
-                let x_3 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(3), order);
-                let x_4 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(4), order);
-                let x_5 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(5), order);
+                let x_neg_1 = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() - one.clone()), order);
+                let x_neg_2 = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() - two.clone()), order);
+                let x_2 = BigInt::mod_pow(&challenge_x.to_bigint(), &two, order);
+                let x_3 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(3), order);
+                let x_4 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(4), order);
+                let x_5 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(5), order);
         
                 let x_neg_2 = Scalar::<Secp256k1>::from_bigint(&x_neg_2);
                 let x_neg_1 = Scalar::<Secp256k1>::from_bigint(&x_neg_1);
@@ -887,7 +905,7 @@ impl VarRange {
                 let x_5 = Scalar::<Secp256k1>::from_bigint(&x_5);
                 let y_nb_plus_b_bar = Scalar::<Secp256k1>::from_bigint(&y_nb_plus_b_bar);
 
-                let mut g_vec_L = &self.A * x.clone();
+                let mut g_vec_L = &self.A * challenge_x.clone();
                 g_vec_L = &g_vec_L + &self.B * x_neg_1;
                 g_vec_L = &g_vec_L + &self.A_hat * y_nb_plus_b_bar * x_2;
                 g_vec_L = &g_vec_L + &self.B_hat * x_neg_2;
@@ -909,11 +927,11 @@ impl VarRange {
 
                 let mut g_1_t_hat_h_tau = Point::<Secp256k1>::zero();
                 for j in 0..6 {
-                    let x_power = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() + BigInt::from(j-6_i32)), order);
+                    let x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() + BigInt::from(j-6_i32)), order);
                     g_1_t_hat_h_tau = &g_1_t_hat_h_tau + &self.T_vec[j as usize] * Scalar::<Secp256k1>::from_bigint(&x_power);
                 }
                 for j in 6..16 {
-                    let x_power = BigInt::mod_pow(&x.to_bigint(), &(BigInt::from(j-5_i32)), order);
+                    let x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(BigInt::from(j-5_i32)), order);
                     g_1_t_hat_h_tau = &g_1_t_hat_h_tau + &self.T_vec[j as usize] * Scalar::<Secp256k1>::from_bigint(&x_power);
                 }
         
@@ -930,11 +948,11 @@ impl VarRange {
 
                 let mut g_1_t_hat_h_tau = Point::<Secp256k1>::zero();
                 for j in 0..6 {
-                    let x_power = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() + BigInt::from(j-6_i32)), order);
+                    let x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() + BigInt::from(j-6_i32)), order);
                     g_1_t_hat_h_tau = &g_1_t_hat_h_tau + &self.T_vec[j as usize] * Scalar::<Secp256k1>::from_bigint(&x_power);
                 }
                 for j in 6..16 {
-                    let x_power = BigInt::mod_pow(&x.to_bigint(), &(BigInt::from(j-5_i32)), order);
+                    let x_power = BigInt::mod_pow(&challenge_x.to_bigint(), &(BigInt::from(j-5_i32)), order);
                     g_1_t_hat_h_tau = &g_1_t_hat_h_tau + &self.T_vec[j as usize] * Scalar::<Secp256k1>::from_bigint(&x_power);
                 }
 
@@ -948,12 +966,12 @@ impl VarRange {
                         .map(|i| &g_vec[i] * yi_inv[i].clone())
                         .collect::<Vec<Point<Secp256k1>>>();
 
-                    let x_neg_1 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - one.clone()), order);
-                    let x_neg_2 = BigInt::mod_pow(&x.to_bigint(), &(order - one.clone() - two.clone()), order);
-                    let x_2 = BigInt::mod_pow(&x.to_bigint(), &two, order);
-                    let x_3 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(3), order);
-                    let x_4 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(4), order);
-                    let x_5 = BigInt::mod_pow(&x.to_bigint(), &BigInt::from(5), order);
+                    let x_neg_1 = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() - one.clone()), order);
+                    let x_neg_2 = BigInt::mod_pow(&challenge_x.to_bigint(), &(order - one.clone() - two.clone()), order);
+                    let x_2 = BigInt::mod_pow(&challenge_x.to_bigint(), &two, order);
+                    let x_3 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(3), order);
+                    let x_4 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(4), order);
+                    let x_5 = BigInt::mod_pow(&challenge_x.to_bigint(), &BigInt::from(5), order);
                 
                     let x_neg_2 = Scalar::<Secp256k1>::from_bigint(&x_neg_2);
                     let x_neg_1 = Scalar::<Secp256k1>::from_bigint(&x_neg_1);
@@ -963,7 +981,7 @@ impl VarRange {
                     let x_5 = Scalar::<Secp256k1>::from_bigint(&x_5);
                     let y_nb_plus_b_bar = Scalar::<Secp256k1>::from_bigint(&y_nb_plus_b_bar);
         
-                    let mut P = &self.A * x.clone();
+                    let mut P = &self.A * challenge_x.clone();
                     P = &P + &self.B * x_neg_1;
                     P = &P + &self.A_hat * y_nb_plus_b_bar * x_2;
                     P = &P + &self.B_hat * x_neg_2;
@@ -989,11 +1007,9 @@ impl VarRange {
                     let hash = Sha512::new().chain_bigint(&kzen_label).result_bigint();
                     let q = generate_random_point(&Converter::to_bytes(&hash));
 
-                    let mut Hq_vec_input = (0..h_vec.len())
-                        .map(|i| &h_vec[i])
-                        .collect::<Vec<&Point<Secp256k1>>>();
-                    Hq_vec_input.push(&q);
-                    let cx: Scalar<Secp256k1> = Sha256::new().chain_points(Hq_vec_input).result_scalar();
+                    transcript.append_points_array(b"g_vec", &g_vec);
+                    transcript.append_points_array(b"h_vec", &h_vec);
+                    let cx: Scalar<Secp256k1> = transcript.challenge_scalar(b"c");
                     let ux = &q * cx;
 
                     temp_vec = (0..n*b+b_bar)
@@ -1006,7 +1022,7 @@ impl VarRange {
                     pad_point_to_power_of_two(&mut h_vec, &(seed + BigInt::from((n*b+b_bar+1+g_vec.len()) as u32)));
 
                     let z = BigInt::mod_add(&t_hat.to_bigint(), &(two.clone() * inner_product(&one_vec, &temp_vec, order)), order);
-                    let result = ip.verify(&g_vec, &h_vec, &ux, &P, &(&Q + &ux * Scalar::<Secp256k1>::from_bigint(&z)));
+                    let result = ip.verify(transcript, &g_vec, &h_vec, &ux, &P, &(&Q + &ux * Scalar::<Secp256k1>::from_bigint(&z)));
                     if result.is_ok() {
                         Ok(())
                     } else {
@@ -1020,6 +1036,7 @@ impl VarRange {
     }
 
     pub fn prove(
+        transcript: &mut Transcript,
         gi: &[Point<Secp256k1>],
         hi: &[Point<Secp256k1>],
         values: Vec<Scalar<Secp256k1>>,
@@ -1030,13 +1047,14 @@ impl VarRange {
         B_vec: &[Point<Secp256k1>],
         seed: &BigInt
     ) -> (SigmaPedersenProof, VarRange) {
-        let sub_proof_1 = SigmaPedersenProof::prove(&values, &x_vec, gi, hi, n+1);
-        let sub_proof_2 = VarRange::range_prove(gi, hi, values, x_vec, s, t, n, B_vec, seed);
+        let sub_proof_1 = SigmaPedersenProof::prove(transcript, &values, &x_vec, gi, hi, B_vec, n+1);
+        let sub_proof_2 = VarRange::range_prove(transcript, gi, hi, values, x_vec, s, t, n, B_vec, seed);
         (sub_proof_1, sub_proof_2)
     }
 
     pub fn verify(
         &self,
+        transcript: &mut Transcript,
         sub_proof1: &SigmaPedersenProof,
         gi: &[Point<Secp256k1>],
         hi: &[Point<Secp256k1>],
@@ -1046,8 +1064,8 @@ impl VarRange {
         n: usize,
         seed: &BigInt
     ) -> Result<(), Errors> {
-        let sub_res1 = sub_proof1.verify(B_vec, gi, hi, n+1);
-        let sub_res2 = self.range_verify(gi, hi, B_vec, s, t, n, seed);
+        let sub_res1 = sub_proof1.verify(transcript, B_vec, gi, hi, n+1);
+        let sub_res2 = self.range_verify(transcript, gi, hi, B_vec, s, t, n, seed);
         if sub_res1.is_ok() && sub_res2.is_ok() {
             Ok(())
         } else {
@@ -1059,6 +1077,7 @@ impl VarRange {
 #[cfg(test)]
 mod test {
     use curv::{arithmetic::{Converter, Samplable}, cryptographic_primitives::hashing::DigestExt, elliptic::curves::{Point, Scalar, Secp256k1}, BigInt};
+    use merlin::Transcript;
     use sha2::{Digest, Sha512};
 
     use super::{generate_random_point, VarRange};
@@ -1096,8 +1115,10 @@ mod test {
             .map(|i| &gi[i] * v_vec[i].clone() + &hi[i] * x_vec[i].clone())
             .collect::<Vec<Point<Secp256k1>>>();
 
-        let range_proof = VarRange::range_prove(&gi, &hi, v_vec, x_vec, s.clone(), t.clone(), n, &C_vec, &(seed + BigInt::from((2*n+2) as i32)));
-        let result = VarRange::range_verify(&range_proof, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
+        let mut verifier = Transcript::new(b"rangeprooftest");
+        let range_proof = VarRange::range_prove(&mut verifier, &gi, &hi, v_vec, x_vec, s.clone(), t.clone(), n, &C_vec, &(seed + BigInt::from((2*n+2) as i32)));
+        let mut verifier = Transcript::new(b"rangeprooftest");
+        let result = VarRange::range_verify(&range_proof, &mut verifier, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
         assert!(result.is_ok());
     }
 
@@ -1133,9 +1154,11 @@ mod test {
         let C_vec = (0..n+1)
             .map(|i| &gi[i] * v_vec[i].clone() + &hi[i] * x_vec[i].clone())
             .collect::<Vec<Point<Secp256k1>>>();
-
-        let varrange_proof = VarRange::prove(&gi, &hi, v_vec, x_vec, s.clone(), t.clone(), n, &C_vec, &(seed + BigInt::from((2*n+2) as i32)));
-        let result = VarRange::verify(&varrange_proof.1, &varrange_proof.0, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
+        
+        let mut verifier = Transcript::new(b"varrangetest");
+        let varrange_proof = VarRange::prove(&mut verifier, &gi, &hi, v_vec, x_vec, s.clone(), t.clone(), n, &C_vec, &(seed + BigInt::from((2*n+2) as i32)));
+        let mut verifier = Transcript::new(b"varrangetest");
+        let result = VarRange::verify(&varrange_proof.1, &mut verifier, &varrange_proof.0, &gi, &hi, &C_vec, s, t, n, &(seed + BigInt::from((2*n+2) as i32)));
         assert!(result.is_ok());
     }
 

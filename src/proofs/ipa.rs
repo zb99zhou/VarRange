@@ -1,10 +1,10 @@
 #![allow(non_snake_case)]
 
-use curv::{cryptographic_primitives::hashing::DigestExt, elliptic::curves::{secp256_k1::Secp256k1, Point, Scalar}, BigInt};
+use curv::{elliptic::curves::{secp256_k1::Secp256k1, Point, Scalar}, BigInt};
 use curv::arithmetic::traits::*;
-use sha2::{Digest, Sha256};
+use merlin::Transcript;
 
-use crate::proofs::vec_poly::inner_product;
+use crate::proofs::{transcript::TranscriptProtocol, vec_poly::inner_product};
 
 use crate::Errors::InnerProductError;
 use crate::Errors;
@@ -20,6 +20,7 @@ pub struct InnerProductArg {
 
 impl InnerProductArg {
     pub fn prove(
+        transcript: &mut Transcript,
         G: &[Point<Secp256k1>],
         H: &[Point<Secp256k1>],
         ux: &Point<Secp256k1>,
@@ -38,6 +39,8 @@ impl InnerProductArg {
         assert_eq!(a.len(), n_hat);
         assert_eq!(b.len(), n_hat);
         assert!(n_hat.is_power_of_two());
+
+        transcript.ipa_domain_sep(n_hat as u64);
 
         if n_hat > 4 {
             let order = Scalar::<Secp256k1>::group_order();
@@ -96,7 +99,12 @@ impl InnerProductArg {
                 }
             });
 
-            let ex: Scalar<Secp256k1> = Sha256::new().chain_points([&A_l, &A_r, &B_l, &B_r, ux]).result_scalar();
+            transcript.append_point(b"A_l", &A_l);
+            transcript.append_point(b"A_r", &A_r);
+            transcript.append_point(b"B_l", &B_l);
+            transcript.append_point(b"B_r", &B_r);
+
+            let ex: Scalar<Secp256k1> = transcript.challenge_scalar(b"ex");
             let ex_bn = ex.to_bigint();
 
             let a_new = (0..n_hat)
@@ -135,7 +143,7 @@ impl InnerProductArg {
             Ar_vec.push(A_r);
             Bl_vec.push(B_l);
             Br_vec.push(B_r);
-            return InnerProductArg::prove(&G_new, &H_new, ux, &a_new, &b_new, Al_vec, Ar_vec, Bl_vec, Br_vec);
+            return InnerProductArg::prove(transcript, &G_new, &H_new, ux, &a_new, &b_new, Al_vec, Ar_vec, Bl_vec, Br_vec);
         }
 
         InnerProductArg {
@@ -150,6 +158,7 @@ impl InnerProductArg {
 
     pub fn verify(
         &self,
+        transcript: &mut Transcript,
         G: &[Point<Secp256k1>],
         H: &[Point<Secp256k1>],
         ux: &Point<Secp256k1>,
@@ -163,6 +172,8 @@ impl InnerProductArg {
         assert_eq!(H.len(), n_hat);
         assert!(n_hat.is_power_of_two());
 
+        transcript.ipa_domain_sep(n_hat as u64);
+
         let order = Scalar::<Secp256k1>::group_order();
 
         if n_hat > 4 {
@@ -170,9 +181,12 @@ impl InnerProductArg {
             let (G_l, G_r) = G.split_at(n_hat);
             let (H_l, H_r) = H.split_at(n_hat);
 
-            let ex: Scalar<Secp256k1> = Sha256::new()
-                .chain_points([&self.Al[0], &self.Ar[0], &self.Bl[0], &self.Br[0], ux])
-                .result_scalar();
+            transcript.append_point(b"A_l", &self.Al[0]);
+            transcript.append_point(b"A_r", &self.Ar[0]);
+            transcript.append_point(b"B_l", &self.Bl[0]);
+            transcript.append_point(b"B_r", &self.Br[0]);
+
+            let ex: Scalar<Secp256k1> = transcript.challenge_scalar(b"ex");
             let ex_bn = ex.to_bigint();
             let ex_sq_bn = BigInt::mod_mul(&ex_bn, &ex_bn, order);
             let ex_sq_fe = Scalar::<Secp256k1>::from(&ex_sq_bn);
@@ -209,7 +223,7 @@ impl InnerProductArg {
                 a_vec: self.a_vec.clone(),
                 b_vec: self.b_vec.clone()
             };
-            return ipa.verify(&G_new, &H_new, ux, &P_tag, &Q_tag);
+            return ipa.verify(transcript, &G_new, &H_new, ux, &P_tag, &Q_tag);
         }
 
         let c = inner_product(&self.a_vec, &self.b_vec, order);
@@ -247,6 +261,7 @@ impl InnerProductArg {
 mod test {
     use curv::{arithmetic::Converter, cryptographic_primitives::hashing::DigestExt, elliptic::curves::{secp256_k1::hash_to_curve::generate_random_point, Point, Scalar, Secp256k1}, BigInt};
     use curv::arithmetic::One;
+    use merlin::Transcript;
     use sha2::{Digest, Sha512};
 
     use crate::proofs::vec_poly::inner_product;
@@ -315,8 +330,10 @@ mod test {
         let Ar_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
         let Bl_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
         let Br_vec: Vec<Point<Secp256k1>> = Vec::with_capacity(n);
-        let ipa = InnerProductArg::prove(&g_vec, &h_vec, &Gx, &a, &b, Al_vec, Ar_vec, Bl_vec, Br_vec);
-        let result = InnerProductArg::verify(&ipa, &g_vec, &h_vec, &Gx, &P, &Q);
+        let mut verifier = Transcript::new(b"ipatest");
+        let ipa = InnerProductArg::prove(&mut verifier, &g_vec, &h_vec, &Gx, &a, &b, Al_vec, Ar_vec, Bl_vec, Br_vec);
+        let mut verifier = Transcript::new(b"ipatest");
+        let result = InnerProductArg::verify(&ipa, &mut verifier, &g_vec, &h_vec, &Gx, &P, &Q);
         assert!(result.is_ok());
     }
 
