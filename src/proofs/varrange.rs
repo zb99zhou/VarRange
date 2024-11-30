@@ -723,6 +723,7 @@ impl VarRange {
         g_vec.append(&mut ui);
 
         transcript.append_points_array(b"g_vec", &g_vec);
+        
 
         assert_eq!(self.T_vec.len(), 16);
 
