@@ -34,6 +34,9 @@ impl SigmaPedersenProof {
         let g_vec = g_vec.to_vec();
         let h_vec = h_vec.to_vec();
 
+        transcript.append_points_array(b"g_vec", &g_vec);
+        transcript.append_points_array(b"h_vec", &h_vec);
+
         let mut r_vec: Vec<Scalar<Secp256k1>> = Vec::with_capacity(n);
         let mut s_vec: Vec<Scalar<Secp256k1>> = Vec::with_capacity(n);
         for _j in 0..n {
@@ -84,6 +87,9 @@ impl SigmaPedersenProof {
         let B_vec = B_vec.to_vec();
         let g_vec = g_vec.to_vec();
         let h_vec = h_vec.to_vec();
+
+        transcript.append_points_array(b"g_vec", &g_vec);
+        transcript.append_points_array(b"h_vec", &h_vec);
 
         transcript.append_points_array(b"R_vec", &self.R_vec);
 

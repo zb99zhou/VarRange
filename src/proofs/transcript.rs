@@ -17,10 +17,10 @@ pub trait TranscriptProtocol {
     fn append_scalar(&mut self, label: &'static [u8], scalar: &Scalar<Secp256k1>);
 
     /// Append a `point` with the given `label`.
-    fn append_point(&mut self, label: &'static [u8], points: &Point<Secp256k1>);
+    fn append_point(&mut self, label: &'static [u8], point: &Point<Secp256k1>);
 
-    /// Append a `point` with the given `label`.
-    fn append_points_array(&mut self, label: &'static [u8], point: &[Point<Secp256k1>]);
+    /// Append `points` with the given `label`.
+    fn append_points_array(&mut self, label: &'static [u8], points: &[Point<Secp256k1>]);
 
     /// Compute a `label`ed challenge variable.
     fn challenge_scalar(&mut self, label: &'static [u8]) -> Scalar<Secp256k1>;

@@ -199,6 +199,8 @@ impl VarRange {
             .collect::<Vec<Point<Secp256k1>>>();
         g_vec.append(&mut ui);
 
+        transcript.append_points_array(b"g_vec", &g_vec);
+
         let mut A = H * &rho_a;
         let mut A_hat = H * &rho_a_hat;
         let mut B = H * &rho_b;
@@ -719,6 +721,8 @@ impl VarRange {
             .collect::<Vec<Point<Secp256k1>>>();
 
         g_vec.append(&mut ui);
+
+        transcript.append_points_array(b"g_vec", &g_vec);
 
         assert_eq!(self.T_vec.len(), 16);
 
