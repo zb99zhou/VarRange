@@ -9,6 +9,7 @@ use crate::proofs::{transcript::TranscriptProtocol, vec_poly::inner_product};
 use crate::Errors::InnerProductError;
 use crate::Errors;
 
+#[derive(Clone)]
 pub struct InnerProductArg {
     pub(super) Al: Vec<Point<Secp256k1>>,
     pub(super) Ar: Vec<Point<Secp256k1>>,

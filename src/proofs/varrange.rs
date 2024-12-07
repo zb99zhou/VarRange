@@ -16,11 +16,13 @@ use super::{ipa::InnerProductArg, sigma_pedersen::SigmaPedersenProof, vec_poly::
 // an argument of knowledge of the vector "L"
 // when n*b+b_bar <= 21, this enumeration type is the vector "L" itself
 // otherwise it consists of t_hat and an inner product argument(IPA)
+#[derive(Clone)]
 enum AgKnowledgeVec {
     LVec(Vec<Scalar<Secp256k1>>),
     IPA{ t_hat: BigInt, ip: InnerProductArg}
 }
 
+#[derive(Clone)]
 pub struct VarRange {
     A: Point<Secp256k1>, // vector commitment to a
     A_hat: Point<Secp256k1>, // vector commitment to a_hat
