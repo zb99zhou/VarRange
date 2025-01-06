@@ -149,7 +149,7 @@ mod tests {
         let R = VecPoly::new(coeff2, BigInt::from(65537), 4);
 
         test_helper_evaluate_vec_poly(L.clone(), BigInt::from(2));
-        println!();
+
         test_helper_mul_vec_poly(L.clone(), R);
 
     }

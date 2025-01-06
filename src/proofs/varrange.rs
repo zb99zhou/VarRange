@@ -101,7 +101,6 @@ pub fn print_bn_vec(bn_vec: Vec<BigInt>) {
     for j in 0..bn_vec.len() {
         println!("bn_vec[{}] is {}, ", j, bn_vec[j]);
     }
-    // println!();
 }
 
 pub fn print_vec_poly(bn_vec: Vec<Vec<BigInt>>, modulus: BigInt) {
